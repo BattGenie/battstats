@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 from dotenv import dotenv_values
 from sqlalchemy import create_engine
@@ -82,71 +83,20 @@ def build_query_string(select_vals, target_table : str, where_col : str, where_v
     else:
         select = select_vals
     
+    # format strings so we don't run into issues with matching capitalization
     if isinstance(where_val, str):
         where_val = '\'' + where_val.lower() + '\''
-        where_col = 'LOWER (' + where_col + ')'
-    elif isinstance(where_val, int):
+        where_col = 'LOWER(' + where_col + ')' 
+    else:
         where_val = str(where_val)
 
     statement = 'SELECT ' + select + ' FROM ' + target_table + ' WHERE ' + where_col + ' = ' + where_val + ';';
     return statement
 
-def lookup_id(filter_val : str, target_table :str, filter_col : str, table_id = ""):
-    '''
-    Makes SQL query on target_table and returns the table id for the specified
-    lookup values.
-
-    Parameters
-    ----------
-    session : SQLalchemy session
-    
-    target_table : string
-        Table that we want to query
-    filter_col : string
-        Name of the column that we want look up id for
-    filter_val : string
-        Table value that we want to look up
-    table_id : int
-        Specify different id type to return. Defaults to table's primary key.
-
-    Returns
-    -------
-    lookup_id : string
-        Returns the id for the look up value
-    '''
-
+def get_meta_variables(meta_variables, schedule_id : str):
     engine, conn = create_db_connection()
 
-    if not table_id:
-    # Dictionary storing the IDs for each table
-        id_dict = {
-            'testdata_meta'  : 'test_id',
-            'schedules_meta' : 'schedule_id'
-            }
-        table_id = id_dict[target_table]
-
-    # Build query string using passed variables and request values from database
-    query = build_query_string(filter_val, target_table, filter_col, table_id)
-    lookup_id = pd.read_sql(query, conn)
-    
-    # Make sure only one ID is returned
-    if lookup_id.size > 1:
-        print('ID not unique.')
-        kill_connection(engine, conn)
-        return None
-    elif lookup_id.size == 0:
-        log.error(target_table + ' does not contain an entry for ' + filter_val + ' in ' + filter_col)
-        kill_connection(engine, conn)
-        exit()
-    
-    kill_connection(engine, conn)
-    return int(lookup_id[table_id][0])
-
-def get_meta_variables(meta_variables, test_name : str):
-    engine, conn = create_db_connection()
-
-    schedule_id = lookup_id(test_name, 'testdata_meta', 'data_file', 'schedule_id')
-    query = build_query_string(meta_variables, schedule_id, 'schedules_meta', 'schedule_id')
+    query = build_query_string(meta_variables, 'schedules_meta', 'schedule_id', schedule_id)
 
     meta_values = pd.read_sql(query, conn)
 
@@ -198,9 +148,62 @@ def _create_config_dict(config_file):
 
     return dict
 
-def load_data(id, target_table):
+def load_data(test_id, target_table):
+    '''
+    Takes a test id as input and returns all columns of the corresponding test.
+
+    Parameters
+    ----------
+    test_id : int
+        Primary key corresponding to desired test
+    target_table : string
+        Table to extract data from
+    
+    Returns
+    -------
+    data : pandas dataframe
+        All columns matching test_id
+    '''
     engine, conn = create_db_connection()
-    query = build_query_string('*', id, target_table, 'test_id')
+    query = build_query_string('*', target_table, 'test_id', test_id)
     data = pd.read_sql(query, conn)
 
     return data
+
+def get_test_ids(test_name : str):
+    '''
+    Makes SQL query on testdata_meta and returns test_id and schedule_id for the
+    test_name passed.
+
+    Parameters
+    ----------
+    test_name : str
+        Name of test 
+
+    Returns
+    -------
+    lookup_ids : pandas dataframe
+        Returns dataframe with [schedule_id, test_id] for the specified test_name.
+    '''
+
+    engine, conn = create_db_connection()
+
+    # Build query string using passed variables and request values from database
+    query = build_query_string(['schedule_id', 'test_id'], 'testdata_meta', 'data_file', test_name)
+    lookup_ids = pd.read_sql(query, conn)
+    
+    # Make sure exactly one ID is returned
+    if lookup_ids.shape[0] > 1:
+        print('ID not unique.')
+        kill_connection(engine, conn)
+        return None
+    elif lookup_ids.shape[0] == 0:
+        log.error('testdata_meta does not contain an entry for ' + test_name + ' in the "data_file" column.')
+        kill_connection(engine, conn)
+        exit()
+    
+    kill_connection(engine, conn)
+    return lookup_ids.astype(int)
+
+test_id = get_test_ids("BG_AmBatt2_Cell7_ICT")['test_id'].values[0]
+print(load_data(test_id, 'testdata_meta'))
